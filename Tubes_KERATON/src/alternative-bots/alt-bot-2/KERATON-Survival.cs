@@ -1,173 +1,172 @@
 // =============================================================================
-// KERATON-Survival.cs
-// Kelompok  : KERATON
-// Strategi  : Survival Greedy (Alternatif 2)
+// KERATON-Survival.cs — Alternatif 2 (UPGRADED)
+// Strategi  : Survival Greedy
 // Heuristik : score = enemyCount * selfEnergy
 //
-// Penjelasan strategi:
-//   Bot memprioritaskan bertahan hidup selama mungkin untuk mengumpulkan
-//   Survival Score (50 poin tiap bot lain mati) dan Last Survival Bonus.
-//   Ketika masih banyak musuh (enemyCount tinggi) dan energi bot sendiri
-//   masih tinggi, bot menghindari konflik dan bergerak ke zona aman.
-//   Bot baru menyerang musuh terlemah ketika kondisi mulai menguntungkan.
+// Upgrade v2:
+//  - Deteksi tembakan musuh dari perubahan energi
+//  - Dodge otomatis saat mendeteksi incoming bullet
+//  - Circle movement mengelilingi tengah arena
+//  - Tetap tembak musuh lemah meski mode survival
+//  - Anti-wall lebih canggih
 // =============================================================================
-
 using System;
-using System.Collections.Generic;
 using System.Drawing;
 using Robocode.TankRoyale.BotApi;
 using Robocode.TankRoyale.BotApi.Events;
 
 public class KERATONSurvival : Bot
 {
-    private Dictionary<int, EnemyData> _enemies = new();
-
-    // Threshold: jika score di atas ini, prioritas survival (hindari konflik)
-    private const double SURVIVAL_THRESHOLD = 200.0;
-
     static void Main(string[] args) => new KERATONSurvival().Start();
-
     KERATONSurvival() : base(BotInfo.FromFile("KERATON-Survival.json")) { }
+
+    private int _enemyCount = 5;
+    private double _lastEnergy = 100;
+    private int _circleDir = 1;
+    private int _circleCount = 0;
 
     public override void Run()
     {
-        // Warna identitas: hijau survivalist
-        BodyColor   = Color.FromArgb(0x14, 0x5A, 0x32);  // Dark Green
-        TurretColor = Color.FromArgb(0x1E, 0x8B, 0x4E);  // Forest Green
-        RadarColor  = Color.FromArgb(0xAD, 0xFF, 0x2F);  // GreenYellow
-        BulletColor = Color.FromArgb(0x7F, 0xFF, 0x00);  // Chartreuse
-        ScanColor   = Color.FromArgb(0x00, 0xFF, 0x7F);  // SpringGreen
-        GunColor    = Color.FromArgb(0x2E, 0x8B, 0x57);  // SeaGreen
-
-        IsAdjustGunForBodyTurn  = true;
-        IsAdjustRadarForGunTurn = true;
+        BodyColor = Color.FromArgb(0x14, 0x5A, 0x32);
+        TurretColor = Color.FromArgb(0x1E, 0x8B, 0x4E);
+        RadarColor = Color.FromArgb(0xAD, 0xFF, 0x2F);
+        BulletColor = Color.FromArgb(0x7F, 0xFF, 0x00);
+        GunColor = Color.FromArgb(0x2E, 0x8B, 0x57);
 
         while (IsRunning)
         {
-            // Radar selalu aktif
-            SetTurnRadarRight(double.PositiveInfinity);
+            // ══════════════════════════════════════════════
+            // GREEDY: score = enemyCount * selfEnergy
+            // Tinggi → banyak musuh hidup → kumpulkan
+            // survival score dulu, jangan ambil risiko
+            // ══════════════════════════════════════════════
+            double score = _enemyCount * Energy;
 
-            // ── HEURISTIK: score = enemyCount * selfEnergy ───────────────────
-            // Semakin banyak musuh dan semakin tinggi energi kita,
-            // semakin kita harus menghindari konflik (kumpulkan survival score)
-            double score = _enemies.Count * Energy;
+            TurnRadarRight(360);
 
-            if (score > SURVIVAL_THRESHOLD)
+            if (score > 200)
             {
-                // Mode SURVIVAL: bergerak ke tengah arena, hindari konflik
-                MoveToCenter();
+                // SURVIVAL MODE: circle movement di tengah arena
+                CircleCenter();
             }
             else
             {
-                // Mode ATTACK: musuh sudah sedikit atau energi kita rendah,
-                // saatnya menyerang musuh terlemah untuk dapat bullet damage bonus
-                AttackWeakest();
+                // ATTACK MODE: musuh tinggal sedikit/energi rendah
+                TurnRadarRight(360);
             }
 
-            // Selalu hindari dinding
             AvoidWalls();
-
-            Execute();
         }
     }
 
-    public override void OnScannedBot(ScannedBotEvent evt)
+    public override void OnScannedBot(ScannedBotEvent e)
     {
-        _enemies[evt.ScannedBotId] = new EnemyData
+        double dist = DistanceTo(e.X, e.Y);
+        double score = _enemyCount * Energy;
+
+        // Deteksi: apakah musuh baru saja menembak?
+        bool enemyFired = e.Energy < _lastEnergy - 0.09;
+        _lastEnergy = e.Energy;
+
+        if (enemyFired)
         {
-            BotId  = evt.ScannedBotId,
-            X      = evt.X,
-            Y      = evt.Y,
-            Energy = evt.Energy
-        };
-    }
+            // Dodge: bergerak tegak lurus dari musuh
+            _circleDir *= -1;
+            TurnRight(90 * _circleDir);
+            Forward(150);
+        }
 
-    public override void OnBotDeath(BotDeathEvent evt)
-    {
-        _enemies.Remove(evt.VictimId);
-    }
+        // Kunci radar
+        double radarB = NormalizeRelativeAngle(BearingTo(e.X, e.Y) - RadarDirection);
+        TurnRadarRight(radarB * 2);
 
-    public override void OnHitByBullet(HitByBulletEvent evt)
-    {
-        // Hindari tembakan dengan manuver 90 derajat
-        double bearing = CalcBearing(evt.Bullet.Direction);
-        SetTurnRight(90 - bearing);
-    }
-
-    // =========================================================================
-    // MoveToCenter — Bergerak menuju tengah arena (zona paling aman)
-    // =========================================================================
-    private void MoveToCenter()
-    {
-        double centerX = ArenaWidth  / 2.0;
-        double centerY = ArenaHeight / 2.0;
-        double dist    = DistanceTo(centerX, centerY);
-
-        if (dist > 80)
+        // ── TEMBAK ────────────────────────────────────
+        double fp;
+        if (score > 200)
         {
-            double bearing = BearingTo(centerX, centerY);
-            SetTurnRight(NormalizeRelativeAngle(bearing - Direction));
-            SetForward(Math.Min(100, dist));
+            // Survival mode: tembak hemat, kecuali musuh hampir mati
+            fp = e.Energy < 20 ? 3.0 : 0.5;
         }
         else
         {
-            // Sudah di tengah: putar saja untuk scan
-            SetTurnRight(30);
+            // Attack mode: tembak serius
+            if (dist < 200) fp = 3.0;
+            else if (dist < 400) fp = 2.0;
+            else fp = 1.0;
+            if (e.Energy < 15) fp = 3.0;
         }
-    }
 
-    // =========================================================================
-    // AttackWeakest — Serang musuh dengan energi paling rendah
-    // =========================================================================
-    private void AttackWeakest()
-    {
-        if (_enemies.Count == 0 || GunHeat > 0) return;
-
-        EnemyData weakest   = null;
-        double    minEnergy = double.MaxValue;
-
-        foreach (var e in _enemies.Values)
+        if (Energy - fp > 5)
         {
-            if (e.Energy < minEnergy)
-            {
-                minEnergy = e.Energy;
-                weakest   = e;
-            }
+            // Prediksi posisi musuh
+            double bulletSpeed = 20 - (3 * fp);
+            double travelTime = dist / bulletSpeed;
+            double pX = e.X + Math.Sin(e.Direction * Math.PI / 180) * e.Speed * travelTime;
+            double pY = e.Y + Math.Cos(e.Direction * Math.PI / 180) * e.Speed * travelTime;
+
+            TurnGunRight(NormalizeRelativeAngle(BearingTo(pX, pY) - GunDirection));
+            Fire(fp);
         }
-
-        if (weakest == null) return;
-
-        double bearing    = BearingTo(weakest.X, weakest.Y);
-        double gunBearing = NormalizeRelativeAngle(bearing - GunDirection);
-        SetTurnGunRight(gunBearing);
-
-        double dist = DistanceTo(weakest.X, weakest.Y);
-        double fp   = dist < 300 ? 2.0 : 1.0;
-
-        if (GunHeat == 0 && Energy > fp)
-            SetFire(fp);
     }
 
-    // =========================================================================
-    // AvoidWalls — Hindari dinding arena
-    // =========================================================================
+    private void CircleCenter()
+    {
+        // Bergerak melingkar mengelilingi tengah arena
+        // sangat sulit ditembak karena gerakannya kurva
+        _circleCount++;
+        double cx = ArenaWidth / 2.0, cy = ArenaHeight / 2.0;
+        double distCenter = DistanceTo(cx, cy);
+
+        if (distCenter > 250)
+        {
+            // Gerak menuju tengah
+            TurnRight(NormalizeRelativeAngle(BearingTo(cx, cy) - Direction));
+            Forward(distCenter - 200);
+        }
+        else
+        {
+            // Sudah di sekitar tengah: circle
+            TurnRight(15 * _circleDir);
+            Forward(80);
+        }
+
+        if (_circleCount % 30 == 0) _circleDir *= -1;
+    }
+
     private void AvoidWalls()
     {
-        const double margin = 60.0;
-        if (X < margin || X > ArenaWidth - margin ||
-            Y < margin || Y > ArenaHeight - margin)
+        double m = 80;
+        if (X < m || X > ArenaWidth - m || Y < m || Y > ArenaHeight - m)
         {
-            double bearing = BearingTo(ArenaWidth / 2.0, ArenaHeight / 2.0);
-            SetTurnRight(NormalizeRelativeAngle(bearing - Direction));
-            SetForward(100);
+            TurnRight(NormalizeRelativeAngle(
+                BearingTo(ArenaWidth / 2.0, ArenaHeight / 2.0) - Direction));
+            Forward(150);
         }
     }
-}
 
-public class EnemyData
-{
-    public int    BotId  { get; set; }
-    public double X      { get; set; }
-    public double Y      { get; set; }
-    public double Energy { get; set; }
+    public override void OnBotDeath(BotDeathEvent e)
+    {
+        _enemyCount = Math.Max(0, _enemyCount - 1);
+    }
+
+    public override void OnHitByBullet(HitByBulletEvent e)
+    {
+        _circleDir *= -1;
+        TurnRight(90 - CalcBearing(e.Bullet.Direction));
+        Forward(120);
+    }
+
+    public override void OnHitBot(HitBotEvent e)
+    {
+        TurnGunRight(NormalizeRelativeAngle(BearingTo(e.X, e.Y) - GunDirection));
+        Fire(3.0);
+        Back(80);
+    }
+
+    public override void OnHitWall(HitWallEvent e)
+    {
+        Back(80);
+        TurnRight(90);
+        Forward(100);
+    }
 }

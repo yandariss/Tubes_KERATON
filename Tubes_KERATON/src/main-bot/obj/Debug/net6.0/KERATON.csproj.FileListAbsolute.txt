@@ -1,0 +1,6 @@
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.csproj.AssemblyReference.cache
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.GeneratedMSBuildEditorConfig.editorconfig
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.AssemblyInfoInputs.cache
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.AssemblyInfo.cs
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.csproj.CoreCompileInputs.cache
+D:\Tugas_Besar\Tubes_KERATON\Tubes_KERATON\src\main-bot\obj\Debug\net6.0\KERATON.sourcelink.json

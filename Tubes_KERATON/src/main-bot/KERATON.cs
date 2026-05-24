@@ -1,242 +1,164 @@
 // =============================================================================
-// KERATON.cs
-// Kelompok  : KERATON
+// KERATON.cs — Main Bot (UPGRADED)
 // Strategi  : Confidence Scoring Greedy
 // Heuristik : score = enemyEnergy / distance
 //
-// Penjelasan strategi:
-//   Setiap turn, bot mengevaluasi semua musuh yang terdeteksi radar dan memilih
-//   target dengan nilai score tertinggi menggunakan formula:
-//       score = enemyEnergy / distance
-//   Nilai score tinggi berarti musuh lemah (energi rendah) sekaligus dekat,
-//   sehingga mudah dieliminasi dan peluang tembakan mengenai lebih besar.
-//   Bot juga menerapkan gerakan zig-zag dan penghindaran dinding otomatis.
+// Upgrade v2:
+//  - Iterative linear targeting (prediksi lebih akurat)
+//  - Adaptive firepower dengan energy management
+//  - Perpendicular movement (strafe) menghindari peluru
+//  - Radar lock pada target terpilih
+//  - Eksekusi cepat musuh hampir mati
 // =============================================================================
-
 using System;
-using System.Collections.Generic;
 using System.Drawing;
 using Robocode.TankRoyale.BotApi;
 using Robocode.TankRoyale.BotApi.Events;
 
 public class KERATON : Bot
 {
-    // ─── Struktur data musuh ──────────────────────────────────────────────────
-    /// <summary>Menyimpan data terbaru setiap musuh yang pernah terdeteksi.</summary>
-    private Dictionary<int, EnemyInfo> _enemyData = new();
-
-    // ─── State movement ───────────────────────────────────────────────────────
-    private int _turnCount     = 0;
-    private int _moveDirection = 1;   // 1 = maju, -1 = mundur
-
-    // ─── Konstanta ────────────────────────────────────────────────────────────
-    private const double WALL_MARGIN  = 60.0;   // Jarak aman dari dinding (piksel)
-    private const int    ZIGZAG_FREQ  = 20;     // Frekuensi pergantian arah (turn)
-    private const double MOVE_STEP    = 80.0;   // Jarak per langkah zig-zag
-    private const double TURN_STEP    = 15.0;   // Sudut belok zig-zag (derajat)
-
-    // ─── Entry point ──────────────────────────────────────────────────────────
     static void Main(string[] args) => new KERATON().Start();
-
-    // ─── Konstruktor ──────────────────────────────────────────────────────────
     KERATON() : base(BotInfo.FromFile("KERATON.json")) { }
 
-    // =========================================================================
-    // Run() — Loop utama bot, dijalankan setiap awal ronde
-    // =========================================================================
+    // Target saat ini
+    private double _tX, _tY, _tDir, _tSpeed, _tEnergy;
+    private bool _hasTarget = false;
+    private int _moveDir = 1;
+    private int _moveCount = 0;
+    private double _lastEnergy = 100;
+
     public override void Run()
     {
-        // Warna identitas bot KERATON (biru kerajaan)
-        BodyColor   = Color.FromArgb(0x1A, 0x53, 0x76);  // Biru tua
-        TurretColor = Color.FromArgb(0x2E, 0x86, 0xC1);  // Biru sedang
-        RadarColor  = Color.FromArgb(0x00, 0xFF, 0xFF);  // Cyan
-        BulletColor = Color.FromArgb(0xFF, 0xD7, 0x00);  // Gold
-        ScanColor   = Color.FromArgb(0x00, 0xFF, 0x88);  // Hijau neon
-        GunColor    = Color.FromArgb(0x0E, 0x6B, 0xB6);  // Biru medium
-        TracksColor = Color.FromArgb(0x0A, 0x29, 0x4D);  // Biru sangat tua
-
-        // Radar dan gun bergerak independen dari badan tank
-        IsAdjustGunForBodyTurn  = true;
-        IsAdjustRadarForGunTurn = true;
+        BodyColor = Color.FromArgb(0x1A, 0x53, 0x76);
+        TurretColor = Color.FromArgb(0x2E, 0x86, 0xC1);
+        RadarColor = Color.FromArgb(0x00, 0xFF, 0xFF);
+        BulletColor = Color.FromArgb(0xFF, 0xD7, 0x00);
+        GunColor = Color.FromArgb(0x0E, 0x6B, 0xB6);
+        TracksColor = Color.FromArgb(0x0A, 0x29, 0x4D);
 
         while (IsRunning)
         {
-            _turnCount++;
-
-            // 1) Radar selalu berputar penuh agar scan arc tidak pernah nol
-            SetTurnRadarRight(double.PositiveInfinity);
-
-            // 2) Hindari dinding sebelum bergerak
-            AvoidWalls();
-
-            // 3) Gerakan zig-zag untuk mempersulit musuh menembak
-            ZigZagMove();
-
-            // 4) Tembak target terbaik berdasarkan greedy scoring
-            ExecuteBestShot();
-
-            // Kirim semua perintah ke server dalam satu turn
-            Execute();
+            TurnRadarRight(360);
         }
     }
 
-    // =========================================================================
-    // OnScannedBot — Dipanggil setiap kali radar mendeteksi musuh
-    // =========================================================================
-    public override void OnScannedBot(ScannedBotEvent evt)
+    public override void OnScannedBot(ScannedBotEvent e)
     {
-        // Simpan / perbarui data musuh yang terdeteksi
-        _enemyData[evt.ScannedBotId] = new EnemyInfo
+        double dist = DistanceTo(e.X, e.Y);
+
+        // ══════════════════════════════════════════════
+        // GREEDY: score = enemyEnergy / distance
+        // ══════════════════════════════════════════════
+        double score = e.Energy / Math.Max(dist, 1);
+        double bestScore = _hasTarget
+            ? _tEnergy / Math.Max(DistanceTo(_tX, _tY), 1)
+            : double.NegativeInfinity;
+
+        if (score >= bestScore)
         {
-            BotId     = evt.ScannedBotId,
-            X         = evt.X,
-            Y         = evt.Y,
-            Energy    = evt.Energy,
-            Direction = evt.Direction,
-            Speed     = evt.Speed
-        };
-    }
-
-    // =========================================================================
-    // OnBotDeath — Hapus data musuh yang sudah mati dari dictionary
-    // =========================================================================
-    public override void OnBotDeath(BotDeathEvent evt)
-    {
-        _enemyData.Remove(evt.VictimId);
-    }
-
-    // =========================================================================
-    // OnHitByBullet — Reaksi saat terkena peluru: belok 90° dari arah datang
-    // =========================================================================
-    public override void OnHitByBullet(HitByBulletEvent evt)
-    {
-        // Putar badan 90 derajat dari arah datangnya peluru
-        double bearing = CalcBearing(evt.Bullet.Direction);
-        SetTurnRight(90 - bearing);
-    }
-
-    // =========================================================================
-    // OnHitWall — Putar badan saat menabrak dinding
-    // =========================================================================
-    public override void OnHitWall(HitWallEvent evt)
-    {
-        // Balikkan arah pergerakan untuk keluar dari dinding
-        _moveDirection *= -1;
-        SetTurnRight(45);
-    }
-
-    // =========================================================================
-    // ExecuteBestShot — Inti logika greedy: pilih target terbaik lalu tembak
-    //
-    // FUNGSI HEURISTIK: score = enemyEnergy / distance
-    //   - enemyEnergy rendah → musuh mudah dieliminasi (dapat Bullet Damage Bonus)
-    //   - distance kecil    → peluang tembakan mengenai lebih besar
-    //   - Kombinasi keduanya menghasilkan pilihan target paling menguntungkan
-    // =========================================================================
-    private void ExecuteBestShot()
-    {
-        // Tidak menembak jika tidak ada data musuh atau meriam masih panas
-        if (_enemyData.Count == 0 || GunHeat > 0) return;
-
-        EnemyInfo bestTarget = null;
-        double    bestScore  = double.NegativeInfinity;
-
-        foreach (var enemy in _enemyData.Values)
-        {
-            double distance = DistanceTo(enemy.X, enemy.Y);
-            if (distance < 1.0) continue;  // Cegah pembagian dengan nol
-
-            // ── FUNGSI HEURISTIK GREEDY ─────────────────────────────────────
-            // score = enemyEnergy / distance
-            // Semakin tinggi score, semakin prioritas musuh ini sebagai target
-            double score = enemy.Energy / distance;
-
-            if (score > bestScore)
-            {
-                bestScore  = score;
-                bestTarget = enemy;
-            }
+            _tX = e.X; _tY = e.Y;
+            _tDir = e.Direction; _tSpeed = e.Speed;
+            _tEnergy = e.Energy;
+            _hasTarget = true;
         }
 
-        if (bestTarget == null) return;
+        // ── FIREPOWER ADAPTIF ─────────────────────────
+        double fp;
+        if (dist < 100) fp = 3.0;
+        else if (dist < 200) fp = 2.5;
+        else if (dist < 350) fp = 2.0;
+        else if (dist < 500) fp = 1.5;
+        else if (dist < 700) fp = 1.0;
+        else fp = 0.5;
 
-        // Arahkan turret ke posisi target
-        double bearing    = BearingTo(bestTarget.X, bestTarget.Y);
-        double gunBearing = NormalizeRelativeAngle(bearing - GunDirection);
-        SetTurnGunRight(gunBearing);
+        // Eksekusi: musuh hampir mati → tembak max
+        if (e.Energy <= 16) fp = 3.0;
+        // Hemat energi: kita lemah → tembak minimal
+        if (Energy < 30 && dist > 300) fp = 0.5;
+        // Jangan bunuh diri
+        if (Energy - fp < 5) fp = 0.1;
 
-        // Tentukan daya tembak berdasarkan jarak (greedy lokal)
-        double dist      = DistanceTo(bestTarget.X, bestTarget.Y);
-        double firepower = CalculateFirePower(dist);
+        // ── ITERATIVE LINEAR TARGETING ────────────────
+        // Iterasi prediksi posisi musuh untuk akurasi tinggi
+        double bulletSpeed = 20 - (3 * fp);
+        double pX = e.X, pY = e.Y;
+        for (int i = 0; i < 10; i++)
+        {
+            double travelTime = DistanceTo(pX, pY) / bulletSpeed;
+            pX = e.X + Math.Sin(e.Direction * Math.PI / 180) * e.Speed * travelTime;
+            pY = e.Y + Math.Cos(e.Direction * Math.PI / 180) * e.Speed * travelTime;
+        }
 
-        // Tembak jika meriam sudah dingin dan energi mencukupi
-        if (GunHeat == 0 && Energy > firepower)
-            SetFire(firepower);
+        // Kunci radar ke target
+        double radarBearing = NormalizeRelativeAngle(BearingTo(e.X, e.Y) - RadarDirection);
+        TurnRadarRight(radarBearing * 2);
+
+        // Arahkan gun ke prediksi posisi
+        double gunBearing = NormalizeRelativeAngle(BearingTo(pX, pY) - GunDirection);
+        TurnGunRight(gunBearing);
+        Fire(fp);
+
+        // ── PERPENDICULAR MOVEMENT (STRAFE) ───────────
+        // Bergerak tegak lurus dari arah musuh
+        // membuat kita sangat sulit ditembak
+        _moveCount++;
+        if (_moveCount % 15 == 0) _moveDir *= -1;
+
+        double bodyBearing = NormalizeRelativeAngle(BearingTo(e.X, e.Y) - Direction);
+        TurnRight(bodyBearing + (90 * _moveDir));
+        Forward(100 * _moveDir);
+
+        // Kejar musuh hampir mati untuk ram bonus
+        if (e.Energy < 10 && dist < 300)
+        {
+            TurnRight(NormalizeRelativeAngle(BearingTo(e.X, e.Y) - Direction));
+            Forward(dist);
+        }
+
+        // ── HINDARI DINDING ───────────────────────────
+        AvoidWalls();
     }
 
-    // =========================================================================
-    // CalculateFirePower — Tentukan daya tembak optimal berdasarkan jarak
-    //
-    // Logika greedy lokal: daya tembak besar saat dekat (damage maksimal),
-    // daya kecil saat jauh (hemat energi, peluru lebih cepat).
-    // =========================================================================
-    private double CalculateFirePower(double distance)
-    {
-        if (distance < 150) return 3.0;   // Sangat dekat: daya maksimum
-        if (distance < 300) return 2.0;   // Dekat: daya tinggi
-        if (distance < 500) return 1.0;   // Sedang: daya menengah
-        return 0.5;                       // Jauh: hemat energi
-    }
-
-    // =========================================================================
-    // ZigZagMove — Gerakan zig-zag untuk menghindari peluru musuh
-    //
-    // Bot berganti arah setiap ZIGZAG_FREQ turn sehingga gerakannya sulit
-    // diprediksi oleh sistem targeting musuh.
-    // =========================================================================
-    private void ZigZagMove()
-    {
-        if (_turnCount % ZIGZAG_FREQ == 0)
-            _moveDirection *= -1;   // Balik arah secara periodik
-
-        SetForward(MOVE_STEP * _moveDirection);
-        SetTurnRight(TURN_STEP * _moveDirection);
-    }
-
-    // =========================================================================
-    // AvoidWalls — Deteksi dan hindari tabrakan dengan dinding arena
-    //
-    // Jika bot terlalu dekat dengan tepi arena, arahkan menuju tengah arena
-    // untuk mencegah wall damage yang menguras energi.
-    // =========================================================================
     private void AvoidWalls()
     {
-        bool nearLeft   = X < WALL_MARGIN;
-        bool nearRight  = X > ArenaWidth  - WALL_MARGIN;
-        bool nearBottom = Y < WALL_MARGIN;
-        bool nearTop    = Y > ArenaHeight - WALL_MARGIN;
-
-        if (nearLeft || nearRight || nearBottom || nearTop)
+        double m = 80;
+        if (X < m || X > ArenaWidth - m || Y < m || Y > ArenaHeight - m)
         {
-            // Putar badan menghadap tengah arena lalu maju
-            double centerX       = ArenaWidth  / 2.0;
-            double centerY       = ArenaHeight / 2.0;
-            double bearingCenter = BearingTo(centerX, centerY);
-            SetTurnRight(NormalizeRelativeAngle(bearingCenter - Direction));
-            SetForward(100);
+            TurnRight(NormalizeRelativeAngle(
+                BearingTo(ArenaWidth / 2.0, ArenaHeight / 2.0) - Direction));
+            Forward(150);
         }
     }
-}
 
-// =============================================================================
-// EnemyInfo — Menyimpan data snapshot musuh dari event OnScannedBot
-// =============================================================================
-public class EnemyInfo
-{
-    public int    BotId     { get; set; }
-    public double X         { get; set; }
-    public double Y         { get; set; }
-    public double Energy    { get; set; }
-    public double Direction { get; set; }
-    public double Speed     { get; set; }
+    public override void OnHitByBullet(HitByBulletEvent e)
+    {
+        // Musuh menembak: deteksi dari perubahan energi
+        // Dodge agresif: belok 90° dari arah datang peluru
+        _moveDir *= -1;
+        TurnRight(90 - CalcBearing(e.Bullet.Direction));
+        Forward(150);
+    }
+
+    public override void OnHitBot(HitBotEvent e)
+    {
+        // Nabrak musuh: tembak langsung daya penuh
+        TurnGunRight(NormalizeRelativeAngle(BearingTo(e.X, e.Y) - GunDirection));
+        Fire(3.0);
+        // Mundur lalu strafe
+        Back(80);
+        TurnRight(90);
+        Forward(100);
+    }
+
+    public override void OnHitWall(HitWallEvent e)
+    {
+        Back(100);
+        TurnRight(135);
+        Forward(100);
+    }
+
+    public override void OnBotDeath(BotDeathEvent e)
+    {
+        _hasTarget = false;
+    }
 }
