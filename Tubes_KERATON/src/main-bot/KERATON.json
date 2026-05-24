@@ -1,0 +1,14 @@
+{
+  "name": "KERATON",
+  "version": "1.0",
+  "authors": [
+    "Anggota 1",
+    "Anggota 2",
+    "Anggota 3"
+  ],
+  "description": "Confidence Scoring Greedy: score = enemyEnergy / distance",
+  "homepage": "",
+  "countryCodes": ["id"],
+  "platform": ".Net",
+  "programmingLang": "C#"
+}

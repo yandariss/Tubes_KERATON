@@ -1,0 +1,13 @@
+{
+  "name": "KERATON-Corner",
+  "version": "1.0",
+  "authors": [
+    "Anggota 1",
+    "Anggota 2",
+    "Anggota 3"
+  ],
+  "description": "Corner Control Greedy: score = cornerDist + (1 / enemyEnergy)",
+  "countryCodes": ["id"],
+  "platform": ".Net",
+  "programmingLang": "C#"
+}

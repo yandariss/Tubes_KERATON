@@ -1,0 +1,13 @@
+{
+  "name": "KERATON-Aggressive",
+  "version": "1.0",
+  "authors": [
+    "Anggota 1",
+    "Anggota 2",
+    "Anggota 3"
+  ],
+  "description": "Aggressive Greedy: score = 1 / distance (selalu tembak musuh terdekat)",
+  "countryCodes": ["id"],
+  "platform": ".Net",
+  "programmingLang": "C#"
+}

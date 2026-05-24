@@ -1,0 +1,13 @@
+{
+  "name": "KERATON-Survival",
+  "version": "1.0",
+  "authors": [
+    "Anggota 1",
+    "Anggota 2",
+    "Anggota 3"
+  ],
+  "description": "Survival Greedy: score = enemyCount * selfEnergy (prioritas bertahan hidup)",
+  "countryCodes": ["id"],
+  "platform": ".Net",
+  "programmingLang": "C#"
+}
